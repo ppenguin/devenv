@@ -102,11 +102,11 @@ let
     nix2container.nix2container.buildImage {
       name = cfg.name;
       tag = cfg.version;
-      initializeNixDatabase = true;
+      initializeNixDatabase = cfg.isDev;
       nixUid = lib.toInt uid;
       nixGid = lib.toInt gid;
 
-      copyToRoot = [
+      copyToRoot = lib.lists.optionals cfg.isDev [
         (pkgs.buildEnv {
           name = "devenv-container-root";
           paths = [
@@ -130,7 +130,7 @@ let
         })
       ];
 
-      perms = [
+      perms = lib.lists.optionals cfg.isDev [
         {
           path = mkTmp;
           regex = "/tmp";
@@ -142,19 +142,20 @@ let
         }
       ];
 
-      config = {
-        Entrypoint = cfg.entrypoint;
-        User = "${user}";
-        WorkingDir = "${homeDir}";
-        Env =
-          lib.mapAttrsToList
-            (
-              name: value: "${name}=${toString value}"
-            )
-            config.env
-          ++ [ "HOME=${homeDir}" "USER=${user}" ];
-        Cmd = [ cfg.startupCommand ];
-      };
+      config =
+        {
+          Entrypoint = cfg.entrypoint;
+          User = "${user}";
+          WorkingDir = "${homeDir}";
+        }
+        // lib.optionalAttrs cfg.isDev {
+          Env =
+            lib.mapAttrsToList (name: value: "${name}=${toString value}")
+              config.env
+            ++ [ "HOME=${homeDir}" "USER=${user}" ];
+          Entrypoint = cfg.entrypoint;
+          Cmd = [ cfg.startupCommand ];
+        };
     };
 
   # <registry> <args>
@@ -190,6 +191,7 @@ let
 
       ${nix2container.skopeo-nix2container}/bin/skopeo --insecure-policy copy "nix:$container" "$dest" ''${args[@]}
     '';
+
   containerOptions = types.submodule ({ name
                                       , config
                                       , ...
@@ -255,10 +257,6 @@ let
         description = "Set to true when the environment is building this container.";
       };
 
-      runEngine = lib.mkOption {
-        type = types.enum [ "docker" "podman" ];
-        default = "docker";
-        description = ''Container engine used to run the container. "docker" or "podman".'';
       isDev = lib.mkOption {
         type = types.bool;
         default = true;
@@ -281,15 +279,7 @@ let
         type = types.package;
         internal = true;
         default = pkgs.writeShellScript "docker-run" ''
-          ${
-            if config.runEngine == "docker"
-            then pkgs.docker + "/bin/docker"
-            else pkgs.podman + "/bin/podman"
-          } run -it ${
-            if (config.registry == null || config.registry == "docker-daemon")
-            then ""
-            else config.registry
-          }${config.name}:${config.version} "$@"
+          docker run -it ${config.name}:${config.version} "$@"
         '';
       };
     };
