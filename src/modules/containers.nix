@@ -259,6 +259,10 @@ let
         type = types.enum [ "docker" "podman" ];
         default = "docker";
         description = ''Container engine used to run the container. "docker" or "podman".'';
+      isDev = lib.mkOption {
+        type = types.bool;
+        default = true;
+        description = "Is a development containers (add tools).";
       };
 
       derivation = lib.mkOption {
