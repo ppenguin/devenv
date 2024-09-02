@@ -1,5 +1,9 @@
-{ pkgs, config, lib, self, ... }:
-
+{ pkgs
+, config
+, lib
+, self
+, ...
+}:
 let
   projectName = name:
     if config.name == null
@@ -20,20 +24,24 @@ let
     url = "github:rrbutani/nix-mk-shell-bin";
     attribute = "containers";
   };
-  shell = mk-shell-bin.lib.mkShellBin { drv = config.shell; nixpkgs = pkgs; };
+  shell = mk-shell-bin.lib.mkShellBin {
+    drv = config.shell;
+    nixpkgs = pkgs;
+  };
   bash = "${pkgs.bashInteractive}/bin/bash";
-  mkEntrypoint = cfg: pkgs.writeScript "entrypoint" ''
-    #!${bash}
+  mkEntrypoint = cfg:
+    pkgs.writeScript "entrypoint" ''
+      #!${bash}
 
-    export PATH=/bin
+      export PATH=/bin
 
-    source ${shell.envScript}
+      source ${shell.envScript}
 
-    # expand any envvars before exec
-    cmd="`echo "$@"|${pkgs.envsubst}/bin/envsubst`"
+      # expand any envvars before exec
+      cmd="`echo "$@"|${pkgs.envsubst}/bin/envsubst`"
 
-    ${bash} -c "$cmd"
-  '';
+      ${bash} -c "$cmd"
+    '';
   user = "user";
   group = "user";
   uid = "1000";
@@ -53,11 +61,11 @@ let
     else [ cfg.copyToRoot ]
   );
 
-  mkTmp = (pkgs.runCommand "devenv-container-tmp" { } ''
+  mkTmp = pkgs.runCommand "devenv-container-tmp" { } ''
     mkdir -p $out/tmp
-  '');
+  '';
 
-  mkEtc = (pkgs.runCommand "devenv-container-etc" { } ''
+  mkEtc = pkgs.runCommand "devenv-container-etc" { } ''
     mkdir -p $out/etc/pam.d
 
     echo "root:x:0:0:System administrator:/root:${bash}" > \
@@ -79,104 +87,113 @@ let
     EOF
 
     touch $out/etc/login.defs
-  '');
+  '';
 
-  mkPerm = derivation:
-    {
-      path = derivation;
-      mode = "0744";
-      uid = lib.toInt uid;
-      gid = lib.toInt gid;
-      uname = user;
-      gname = group;
-    };
-
-
-  mkDerivation = cfg: nix2container.nix2container.buildImage {
-    name = cfg.name;
-    tag = cfg.version;
-    initializeNixDatabase = true;
-    nixUid = lib.toInt uid;
-    nixGid = lib.toInt gid;
-
-    copyToRoot = [
-      (pkgs.buildEnv {
-        name = "devenv-container-root";
-        paths = [
-          pkgs.coreutils-full
-          pkgs.bashInteractive
-          pkgs.su
-          pkgs.sudo
-        ];
-        pathsToLink = "/bin";
-      })
-      mkEtc
-      mkTmp
-    ];
-
-    maxLayers = cfg.maxLayers;
-
-    layers = [
-      (nix2container.nix2container.buildLayer {
-        perms = map mkPerm (mkMultiHome (homeRoots cfg));
-        copyToRoot = mkMultiHome (homeRoots cfg);
-      })
-    ];
-
-    perms = [
-      {
-        path = mkTmp;
-        regex = "/tmp";
-        mode = "1777";
-        uid = 0;
-        gid = 0;
-        uname = "root";
-        gname = "root";
-      }
-    ];
-
-    config = {
-      Entrypoint = cfg.entrypoint;
-      User = "${user}";
-      WorkingDir = "${homeDir}";
-      Env = lib.mapAttrsToList
-        (name: value:
-          "${name}=${toString value}"
-        )
-        config.env ++ [ "HOME=${homeDir}" "USER=${user}" ];
-      Cmd = [ cfg.startupCommand ];
-    };
+  mkPerm = derivation: {
+    path = derivation;
+    mode = "0744";
+    uid = lib.toInt uid;
+    gid = lib.toInt gid;
+    uname = user;
+    gname = group;
   };
 
+  mkDerivation = cfg:
+    nix2container.nix2container.buildImage {
+      name = cfg.name;
+      tag = cfg.version;
+      initializeNixDatabase = true;
+      nixUid = lib.toInt uid;
+      nixGid = lib.toInt gid;
+
+      copyToRoot = [
+        (pkgs.buildEnv {
+          name = "devenv-container-root";
+          paths = [
+            pkgs.coreutils-full
+            pkgs.bashInteractive
+            pkgs.su
+            pkgs.sudo
+          ];
+          pathsToLink = "/bin";
+        })
+        mkEtc
+        mkTmp
+      ];
+
+      maxLayers = cfg.maxLayers;
+
+      layers = [
+        (nix2container.nix2container.buildLayer {
+          perms = map mkPerm (mkMultiHome (homeRoots cfg));
+          copyToRoot = mkMultiHome (homeRoots cfg);
+        })
+      ];
+
+      perms = [
+        {
+          path = mkTmp;
+          regex = "/tmp";
+          mode = "1777";
+          uid = 0;
+          gid = 0;
+          uname = "root";
+          gname = "root";
+        }
+      ];
+
+      config = {
+        Entrypoint = cfg.entrypoint;
+        User = "${user}";
+        WorkingDir = "${homeDir}";
+        Env =
+          lib.mapAttrsToList
+            (
+              name: value: "${name}=${toString value}"
+            )
+            config.env
+          ++ [ "HOME=${homeDir}" "USER=${user}" ];
+        Cmd = [ cfg.startupCommand ];
+      };
+    };
+
   # <registry> <args>
-  mkCopyScript = cfg: pkgs.writeShellScript "copy-container" ''
-    set -e -o pipefail
+  mkCopyScript = cfg:
+    pkgs.writeShellScript "copy-container" ''
+      set -e -o pipefail
 
-    container=$1
-    shift
+      container=$1
+      shift
 
-    if [[ "$1" == false ]]; then
-      registry=${cfg.registry}
-    else
-      registry="$1"
-    fi
-    shift
+      if [[ "$1" == false ]]; then
+        registry=${cfg.registry}
+      else
+        registry="$1"
+      fi
+      shift
 
-    dest="''${registry}${cfg.name}:${cfg.version}"
+      dest="''${registry}${cfg.name}:${cfg.version}"
 
-    if [[ $# == 0 ]]; then
-      args=(${if cfg.defaultCopyArgs == [] then "" else toString cfg.defaultCopyArgs})
-    else
-      args=("$@")
-    fi
+      if [[ $# == 0 ]]; then
+        args=(${
+        if cfg.defaultCopyArgs == []
+        then ""
+        else toString cfg.defaultCopyArgs
+      })
+      else
+        args=("$@")
+      fi
 
-    echo
-    echo "Copying container $container to $dest"
-    echo
+      echo
+      echo "Copying container $container to $dest"
+      echo
 
-    ${nix2container.skopeo-nix2container}/bin/skopeo --insecure-policy copy "nix:$container" "$dest" ''${args[@]}
-  '';
-  containerOptions = types.submodule ({ name, config, ... }: {
+      ${nix2container.skopeo-nix2container}/bin/skopeo --insecure-policy copy "nix:$container" "$dest" ''${args[@]}
+    '';
+  containerOptions = types.submodule ({ name
+                                      , config
+                                      , ...
+                                      }: {
     options = {
       name = lib.mkOption {
         type = types.nullOr types.str;
@@ -213,11 +230,10 @@ let
 
       defaultCopyArgs = lib.mkOption {
         type = types.listOf types.str;
-        description =
-          ''
-            Default arguments to pass to `skopeo copy`.
-            You can override them by passing arguments to the script.
-          '';
+        description = ''
+          Default arguments to pass to `skopeo copy`.
+          You can override them by passing arguments to the script.
+        '';
         default = [ ];
       };
 
@@ -239,6 +255,12 @@ let
         description = "Set to true when the environment is building this container.";
       };
 
+      runEngine = lib.mkOption {
+        type = types.enum [ "docker" "podman" ];
+        default = "docker";
+        description = ''Container engine used to run the container. "docker" or "podman".'';
+      };
+
       derivation = lib.mkOption {
         type = types.package;
         internal = true;
@@ -255,7 +277,15 @@ let
         type = types.package;
         internal = true;
         default = pkgs.writeShellScript "docker-run" ''
-          docker run -it ${config.name}:${config.version} "$@"
+          ${
+            if config.runEngine == "docker"
+            then pkgs.docker + "/bin/docker"
+            else pkgs.podman + "/bin/podman"
+          } run -it ${
+            if (config.registry == null || config.registry == "docker-daemon")
+            then ""
+            else config.registry
+          }${config.name}:${config.version} "$@"
         '';
       };
     };
@@ -292,9 +322,13 @@ in
         startupCommand = lib.mkDefault config.procfileScript;
       };
     }
-    (if envContainerName == "" then { } else {
-      containers.${envContainerName}.isBuilding = true;
-    })
+    (
+      if envContainerName == ""
+      then { }
+      else {
+        containers.${envContainerName}.isBuilding = true;
+      }
+    )
     (lib.mkIf config.container.isBuilding {
       devenv.tmpdir = lib.mkOverride (lib.modules.defaultOverridePriority - 1) "/tmp";
       devenv.runtime = lib.mkOverride (lib.modules.defaultOverridePriority - 1) "${config.devenv.tmpdir}/devenv";
